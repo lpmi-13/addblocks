@@ -48,8 +48,8 @@ function pour(root: HTMLElement, place: number): void {
   q(root, `.tray--bottom[data-place="${place}"]`).click();
 }
 
-/** Tap a top tray, then press Move down to move a single block. */
-function moveOne(root: HTMLElement, place: number): void {
+/** Tap a top tray to pick it up, then press Move down to pour the whole stack. */
+function moveDown(root: HTMLElement, place: number): void {
   q(root, `.tray--top[data-place="${place}"]`).click();
   q(root, '[data-focus="move-down"]').click();
 }
@@ -64,13 +64,13 @@ describe("ProblemView — pour & bounce flow", () => {
     expect(root.querySelectorAll(".cell--piece").length).toBe(3); // 3 top ones
   });
 
-  it("pours a stack, fills the bottom to ten, and bounces the overflow left", () => {
-    const { root, machine } = mount(8, 5);
+  it("pours a stack, fills the bottom to ten, and carries a single block left", () => {
+    const { root, machine } = mount(8, 5); // 8 + 5 = 13
     pour(root, 0);
-    expect(machine.column(0)).toEqual({ top: 0, bottom: 10 });
-    expect(machine.column(1)).toEqual({ top: 3, bottom: 0 });
-    // a new tens column has appeared holding the 3 bounced blocks
-    expect(root.querySelectorAll('.tray--top[data-place="1"] .cell--piece').length).toBe(3);
+    expect(machine.column(0)).toEqual({ top: 0, bottom: 3 }); // remainder stays
+    expect(machine.column(1)).toEqual({ top: 1, bottom: 0 }); // one carried, not three
+    // a new tens column has appeared holding the single carried block
+    expect(root.querySelectorAll('.tray--top[data-place="1"] .cell--piece').length).toBe(1);
   });
 
   it("completes once every top stack is emptied", () => {
@@ -82,11 +82,18 @@ describe("ProblemView — pour & bounce flow", () => {
     expect(q(root, ".result__praise").textContent).toContain("combined all the blocks");
   });
 
-  it("moves a single block with Move down", () => {
+  it("pours the whole top stack with Move down, carrying one block left", () => {
+    const { root, machine } = mount(8, 5); // 8 + 5 = 13
+    moveDown(root, 0); // whole stack, not one block: fills to ten, carries one
+    expect(machine.column(0)).toEqual({ top: 0, bottom: 3 });
+    expect(machine.column(1)).toEqual({ top: 1, bottom: 0 });
+  });
+
+  it("empties the whole stack with Move down when it all fits", () => {
     const { root, machine } = mount(3, 4);
-    moveOne(root, 0);
-    expect(machine.column(0)).toEqual({ top: 2, bottom: 5 });
-    expect(machine.isComplete()).toBe(false);
+    moveDown(root, 0);
+    expect(machine.column(0)).toEqual({ top: 0, bottom: 7 });
+    expect(machine.isComplete()).toBe(true);
   });
 
   it("offers a New button (and no undo/start-over) that requests a fresh challenge", () => {

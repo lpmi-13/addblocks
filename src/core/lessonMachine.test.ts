@@ -20,41 +20,45 @@ function combineAll(m: LessonMachine): void {
 }
 
 describe("LessonMachine — pour", () => {
-  it("fills the bottom to ten and bounces the overflow left", () => {
-    const m = new LessonMachine(problem(8, 5)); // one column: top 8, bottom 5
+  it("fills the bottom to ten, compresses it, and carries a single block left", () => {
+    const m = new LessonMachine(problem(8, 5)); // one column: top 8, bottom 5 → 13
     const r = m.pour(0);
     expect(r.ok).toBe(true);
-    expect(r.poured).toBe(5); // filled the 5 empty slots
-    expect(r.bounced).toBe(3); // 3 could not fit
+    expect(r.poured).toBe(8); // the whole top stack fell in
+    expect(r.filledTo).toBe(10); // the frame filled to ten before compressing
+    expect(r.carried).toBe(1); // exactly one block carries, regardless of overflow
+    expect(r.remainder).toBe(3); // 13 − 10 stays behind
     expect(r.to).toBe(1);
     expect(r.createdColumn).toBe(true);
-    expect(m.column(0)).toEqual({ top: 0, bottom: 10 });
-    expect(m.column(1)).toEqual({ top: 3, bottom: 0 });
+    expect(m.column(0)).toEqual({ top: 0, bottom: 3 });
+    expect(m.column(1)).toEqual({ top: 1, bottom: 0 });
     expect(m.columnCount).toBe(2);
   });
 
-  it("pours cleanly with no bounce when everything fits", () => {
+  it("pours cleanly with no carry when the frame stays under ten", () => {
     const m = new LessonMachine(problem(3, 4));
     const r = m.pour(0);
     expect(r.poured).toBe(3);
-    expect(r.bounced).toBe(0);
+    expect(r.carried).toBe(0);
+    expect(r.remainder).toBe(7);
     expect(r.to).toBe(-1);
     expect(r.completed).toBe(true);
     expect(m.column(0)).toEqual({ top: 0, bottom: 7 });
   });
 
-  it("bounced blocks can overflow the next top into a hovering pile", () => {
+  it("carries exactly one no matter how far past ten the column summed", () => {
     const m = new LessonMachine(problem(99, 99));
-    m.pour(0); // ones: 1 fits, 8 bounce → tens top becomes 9 + 8 = 17
-    expect(m.column(1).top).toBe(17); // 10 in the frame, 7 hovering
+    m.pour(0); // ones: 9 + 9 = 18 → remainder 8, a single block carries to the tens
+    expect(m.column(0)).toEqual({ top: 0, bottom: 8 });
+    expect(m.column(1).top).toBe(10); // the tens top was 9, plus the one carry
   });
 
-  it("conserves the total block count across a full combine", () => {
+  it("preserves the represented place-value total across a full combine", () => {
     const m = new LessonMachine(problem(99, 99));
-    const start = m.totalBlocks();
+    expect(m.representedValue()).toBe(198);
     combineAll(m);
     expect(m.isComplete()).toBe(true);
-    expect(m.totalBlocks()).toBe(start); // 36 blocks throughout
+    expect(m.representedValue()).toBe(198); // 99 + 99, conserved by the compression
     for (let p = 0; p < m.columnCount; p++) expect(m.column(p).top).toBe(0);
   });
 
@@ -62,27 +66,7 @@ describe("LessonMachine — pour", () => {
     const m = new LessonMachine(problem(99, 99));
     expect(m.columnCount).toBe(2);
     combineAll(m);
-    expect(m.columnCount).toBeGreaterThan(2); // carried into hundreds (and beyond)
-  });
-});
-
-describe("LessonMachine — single move", () => {
-  it("drops one block into the bottom while there is room", () => {
-    const m = new LessonMachine(problem(3, 4));
-    const r = m.move(0);
-    expect(r.poured).toBe(1);
-    expect(r.bounced).toBe(0);
-    expect(m.column(0)).toEqual({ top: 2, bottom: 5 });
-  });
-
-  it("bounces a single block once the bottom is full", () => {
-    const m = new LessonMachine(problem(8, 5)); // bottom already at 5
-    for (let i = 0; i < 5; i++) m.move(0); // fill bottom to 10
-    expect(m.column(0)).toEqual({ top: 3, bottom: 10 });
-    const r = m.move(0); // bottom full → bounce one
-    expect(r.poured).toBe(0);
-    expect(r.bounced).toBe(1);
-    expect(m.column(1).top).toBe(1);
+    expect(m.columnCount).toBeGreaterThan(2); // carried into hundreds
   });
 });
 
@@ -100,20 +84,31 @@ describe("LessonMachine — undo & completion", () => {
   it("completes exactly when every top stack is empty", () => {
     const m = new LessonMachine(problem(8, 5));
     m.pour(0);
-    expect(m.isComplete()).toBe(false); // column 1 still holds the bounced blocks
+    expect(m.isComplete()).toBe(false); // column 1 still holds the carried block
     m.pour(1);
     expect(m.isComplete()).toBe(true);
   });
 
-  it("always terminates and conserves blocks for generated problems", () => {
+  it("always terminates and preserves the total for generated problems", () => {
     for (const level of LEVELS) {
       for (let s = 0; s < 40; s++) {
-        const m = new LessonMachine(generateProblem(level, s, stageForIndex(s % 6)));
-        const start = m.totalBlocks();
+        const p = generateProblem(level, s, stageForIndex(s % 6));
+        const m = new LessonMachine(p);
+        expect(m.representedValue()).toBe(p.sum);
         combineAll(m);
         expect(m.isComplete()).toBe(true);
-        expect(m.totalBlocks()).toBe(start);
+        expect(m.representedValue()).toBe(p.sum);
       }
+    }
+  });
+
+  it("never grows a fifth column for a 4-digit problem", () => {
+    for (let s = 0; s < 200; s++) {
+      const p = generateProblem(3, s, stageForIndex(s % 6));
+      const m = new LessonMachine(p);
+      combineAll(m);
+      expect(m.isComplete()).toBe(true);
+      expect(m.columnCount).toBe(4); // the thousands column never carries out
     }
   });
 });

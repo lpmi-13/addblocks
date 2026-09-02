@@ -473,6 +473,13 @@ body {
   margin: 0 auto;
   min-width: 100%;
   touch-action: pan-y;
+  /* Cell size shrinks as columns are added so the whole board fits the viewport
+     width — a 4-digit problem, or a smaller one that carries into a new leftmost
+     column, still lays out without horizontal scrolling on a phone. --cols is set
+     per render (falls back to a 4-wide board). The 5.6vh term still bounds the two
+     stacked frames on a short window. */
+  --cols: 4;
+  --cell: clamp(16px, min(5.6vh, calc((100vw - 11.5rem) / (var(--cols) * 2))), 56px);
 }
 .screen--problem[data-phase="combining"] .board,
 .screen--problem[data-phase="complete"] .board {

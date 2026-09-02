@@ -6,6 +6,12 @@ interface PairOptions {
   regroup: boolean;
   /** Keep the top digit small to reduce early dragging effort. */
   smallTop?: boolean;
+  /**
+   * Cap the pair's sum so the column can never reach ten, even after a carry
+   * arrives from the right. Used for the leftmost column of a 4-digit problem,
+   * which must never spill into a fifth column.
+   */
+  capSum?: number;
 }
 
 /**
@@ -15,15 +21,19 @@ interface PairOptions {
  */
 function columnPair(rng: Rng, opts: PairOptions): [number, number] {
   if (opts.regroup) {
-    // a + b >= 10, both single digits (b is at least 1 since 10 - a >= 1).
-    const a = rng.int(1, 9);
-    const b = rng.int(10 - a, 9);
+    // a + b > 10 (strictly): the bottom tray fills to ten and compresses to a
+    // single carry, so a carrying column always visibly carries rather than
+    // merely filling up exactly. a is 2..9 (a = 1 could only reach ten), and b
+    // is at least 11 - a, so both stay single digits.
+    const a = rng.int(2, 9);
+    const b = rng.int(11 - a, 9);
     return [a, b];
   }
-  // No regrouping: a + b <= 9, with both digits at least 1.
-  const topMax = opts.smallTop ? 4 : 8; // leave room for b >= 1
+  // No regrouping: a + b <= max, with both digits at least 1.
+  const max = opts.capSum ?? 9;
+  const topMax = opts.smallTop ? Math.min(4, max - 1) : max - 1; // leave room for b >= 1
   const a = rng.int(1, topMax);
-  const b = rng.int(1, 9 - a);
+  const b = rng.int(1, max - a);
   return [a, b];
 }
 
@@ -49,37 +59,40 @@ export function generateProblem(
   const topDigits: number[] = [];
   const bottomDigits: number[] = [];
 
-  // For "one-exchange", pick a single column that will carry.
-  const exchangeColumn = stage === "one-exchange" ? rng.int(0, level) : -1;
+  // Every exercise carries at least once. Columns eligible to carry are all of
+  // them, except the leftmost column of a 4-digit (thousands) problem: a carry
+  // there would spill into a fifth column, which we never want. At smaller
+  // levels the leftmost column may carry — that simply grows a new column on the
+  // left, which the board lays out responsively.
+  const topPlace = level;
+  const cappedLeader = level === 3; // 4-digit: thousands place must never carry
+  const carryEligible: number[] = [];
+  for (let p = 0; p <= level; p++) {
+    if (cappedLeader && p === topPlace) continue;
+    carryEligible.push(p);
+  }
 
-  // For "mixed", decide per column whether it regroups; ensure at least one.
-  let mixedRegroup: boolean[] = [];
+  // At least one eligible column always carries. "mixed" may add more; the
+  // gentler stages keep to the single guaranteed carry.
+  const carrying = new Set<number>();
+  carrying.add(carryEligible[rng.int(0, carryEligible.length - 1)]);
   if (stage === "mixed") {
-    mixedRegroup = Array.from({ length: level + 1 }, () => rng.next() < 0.4);
-    if (!mixedRegroup.some(Boolean)) {
-      mixedRegroup[rng.int(0, level)] = true;
+    for (const p of carryEligible) {
+      if (rng.next() < 0.45) carrying.add(p);
     }
   }
 
   for (let p = 0; p <= level; p++) {
-    let regroup = false;
-    switch (stage) {
-      case "orientation":
-      case "within-place":
-        regroup = false;
-        break;
-      case "one-exchange":
-        regroup = p === exchangeColumn;
-        break;
-      case "mixed":
-        regroup = mixedRegroup[p];
-        break;
+    if (carrying.has(p)) {
+      const [a, b] = columnPair(rng, { regroup: true });
+      topDigits[p] = a;
+      bottomDigits[p] = b;
+      continue;
     }
-
-    const [a, b] = columnPair(rng, {
-      regroup,
-      smallTop: stage === "orientation",
-    });
+    // A capped leader stays at eight or below so that even a carry arriving from
+    // the column to its right can never push it to ten.
+    const capSum = cappedLeader && p === topPlace ? 8 : undefined;
+    const [a, b] = columnPair(rng, { regroup: false, smallTop: stage === "orientation", capSum });
     topDigits[p] = a;
     bottomDigits[p] = b;
   }

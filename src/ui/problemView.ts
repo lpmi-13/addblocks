@@ -122,7 +122,7 @@ export class ProblemView {
       this.showCompletion();
     } else {
       announce(
-        `${this.spokenAddends()} Drag each top stack down into its tray. Extra blocks bounce to the next column on the left.`,
+        `${this.spokenAddends()} Drag each top stack down into its tray. When a frame fills to ten it carries one block to the next column on the left.`,
       );
     }
   }
@@ -151,6 +151,9 @@ export class ProblemView {
 
     this.boardEl.classList.toggle("board--numbered", this.prefs.showNumbers);
     this.boardEl.style.gridTemplateColumns = `minmax(2.2rem, auto) repeat(${count}, auto)`;
+    // Drives the responsive cell size so more columns (a carry can grow a fourth)
+    // shrink the blocks to fit the viewport rather than overflowing it.
+    this.boardEl.style.setProperty("--cols", String(count));
 
     // Row 1: place labels.
     this.boardEl.append(this.gridCell(1, 1, h("span", { class: "corner", attrs: { "aria-hidden": "true" } })));
@@ -295,7 +298,9 @@ export class ProblemView {
       const sel = this.machine.selectedPlace;
       const canMove = sel != null && this.machine.canMove(sel);
       this.controlsEl.append(
-        this.button("Move down ↓", "primary", () => sel != null && this.applyMove(sel), "move-down", !canMove),
+        // "Move down" slides the whole top stack into its tray at once — the same
+        // action as a drag release, not a single block at a time.
+        this.button("Move down ↓", "primary", () => sel != null && this.applyPour(sel), "move-down", !canMove),
         this.button("New", "ghost", () => this.handlers.onNew(), "new"),
       );
       return;
@@ -325,7 +330,7 @@ export class ProblemView {
       text =
         sel != null
           ? `Pour the top ${placeName(sel)} stack into the ${placeName(sel)} tray, or press Move down.`
-          : "Drag a top stack down into its tray — any extra blocks bounce to the next column on the left.";
+          : "Drag a top stack down into its tray — fill ten and it carries one block to the next column on the left.";
     } else {
       text = "You combined all the blocks.";
     }
@@ -407,21 +412,8 @@ export class ProblemView {
       if (result.reason === "no-piece") this.reportInvalidColumn(place);
       return;
     }
-    playCue(result.bounced > 0 ? "exchange" : "move", this.prefs.sound);
+    playCue(result.carried > 0 ? "exchange" : "move", this.prefs.sound);
     this.commit(result, srcRect, ghost);
-  }
-
-  /** Move a single block (fine control / keyboard). */
-  private applyMove(place: number): void {
-    if (this.animating) return;
-    const srcRect = this.topTrays[place]?.getBoundingClientRect() ?? null;
-    const result = this.machine.move(place);
-    if (!result.ok) {
-      if (result.reason === "no-piece") this.reportInvalidColumn(place);
-      return;
-    }
-    playCue(result.bounced > 0 ? "exchange" : "move", this.prefs.sound);
-    this.commit(result, srcRect);
   }
 
   /** Announce, animate, then settle to the canonical state. */
@@ -450,68 +442,53 @@ export class ProblemView {
 
     this.animating = true;
 
-    // Draw the target column still holding its pre-bounce stack while blocks fly in.
-    const bouncing = result.bounced > 0;
-    let visual: Column[] | undefined;
-    if (bouncing) {
-      visual = this.machine.snapshotColumns();
-      visual[result.to].top -= result.bounced;
-    }
+    // Hold an intermediate picture while the blocks pour in: the poured column's
+    // bottom shows its peak fill (a full ten when it will carry), and the carry
+    // has not yet reached the target column's top.
+    const carrying = result.carried > 0;
+    const visual = this.machine.snapshotColumns();
+    visual[result.from].top = 0;
+    visual[result.from].bottom = result.filledTo;
+    if (carrying && result.to >= 0) visual[result.to].top -= result.carried;
     this.renderBoard(visual);
     this.renderControls();
 
-    // Any carry blocks fly on to the next column once the pour has landed.
-    const flyCarry = (from: DOMRect | null, done: () => void) => {
-      if (!bouncing) {
-        done();
-        return;
-      }
-      const targetRect = this.topTrays[result.to]?.getBoundingClientRect() ?? null;
-      this.flyBlocks(from ?? srcRect!, targetRect, result.bounced, done);
+    // Once the pour has landed, a full frame compresses into one carry block that
+    // arcs into the next column's top; then we settle to the canonical state.
+    const carryThenFinish = () => {
+      if (carrying) this.compressAndCarry(result.from, result.to, finalize);
+      else finalize();
     };
 
-    if (ghost && result.poured > 0) {
-      // Drag release: glide the lifted stack down into the bottom tray, then carry.
-      this.slidePourIn(result, ghost, (landed) => flyCarry(landed, finalize));
-      return;
-    }
     if (ghost) {
-      // Bottom already full — nothing settles here; the whole stack carries left.
-      ghost.remove();
-      flyCarry(srcRect, finalize);
+      // Drag release: glide the lifted stack down into the bottom tray, then carry.
+      this.slidePourIn(result, ghost, carryThenFinish);
       return;
     }
 
     // Tap / keyboard pour: blocks drop into the bottom tray from above.
-    if (result.poured > 0) {
-      const newBottom = this.machine.column(result.from).bottom;
-      this.markPourIn(result.from, newBottom - result.poured, newBottom);
-    }
-    if (bouncing) {
-      flyCarry(srcRect, finalize);
-    } else {
-      this.after(POUR_MS, finalize);
-    }
+    this.markPourIn(result.from, result.bottomBefore, result.filledTo);
+    this.after(POUR_MS, carryThenFinish);
   }
 
   /**
    * Glide the lifted ghost from where it was released down onto the bottom tray,
    * then cross-fade it into the freshly-poured cells so the stack reads as
-   * sliding into place rather than snapping. `done` gets the landed tray rect so
-   * any carry can fly on from there.
+   * sliding into place rather than snapping. `done` runs once the stack has
+   * settled, so any carry can compress and fly on from the filled frame.
    */
-  private slidePourIn(result: MoveResult, ghost: HTMLElement, done: (landed: DOMRect | null) => void): void {
+  private slidePourIn(result: MoveResult, ghost: HTMLElement, done: () => void): void {
     const bottomTray = this.bottomTrays[result.from];
     const target = bottomTray?.getBoundingClientRect() ?? null;
     if (!bottomTray || !target) {
       ghost.remove();
-      done(null);
+      done();
       return;
     }
 
-    // Hold the poured cells hidden until the gliding stack arrives over them.
-    const newBottom = this.machine.column(result.from).bottom;
-    const poured = this.pouredCells(result.from, newBottom - result.poured, newBottom);
+    // Hold the freshly-filled cells (from the old fill up to the peak) hidden
+    // until the gliding stack arrives over them.
+    const poured = this.pouredCells(result.from, result.bottomBefore, result.filledTo);
     for (const c of poured) c.classList.add("cell--settling");
 
     const layers = Array.from(ghost.querySelectorAll<HTMLElement>(".tray-ghost__col"));
@@ -529,7 +506,7 @@ export class ProblemView {
       });
       const cleanup = () => {
         ghost.remove();
-        done(target);
+        done();
       };
       fade.onfinish = cleanup;
       fade.oncancel = cleanup;
@@ -559,7 +536,9 @@ export class ProblemView {
     const from = placeName(result.from);
     const parts: string[] = [];
     if (result.poured > 0) parts.push(`Poured ${result.poured} into the ${from} tray.`);
-    if (result.bounced > 0) parts.push(`${result.bounced} bounced to ${placeName(result.to)}.`);
+    if (result.carried > 0) {
+      parts.push(`Filled ten — carried one to ${placeName(result.to)}, ${result.remainder} left.`);
+    }
     if (parts.length) announce(parts.join(" "));
   }
 
@@ -580,48 +559,61 @@ export class ProblemView {
     return cells;
   }
 
-  /** Animate `count` blocks arcing from the poured column up-left into the next column's top. */
-  private flyBlocks(from: DOMRect, to: DOMRect | null, count: number, done: () => void): void {
-    if (!to) {
+  /**
+   * A full frame of ten just landed in `fromPlace`'s bottom tray. Collapse those
+   * ten cells into a single block that arcs up-left into `toPlace`'s top tray —
+   * the carry. The remainder is revealed by the re-render that `done` triggers.
+   */
+  private compressAndCarry(fromPlace: number, toPlace: number, done: () => void): void {
+    const fromTray = this.bottomTrays[fromPlace];
+    if (!fromTray || !this.canAnimateGhost()) {
       this.after(BOUNCE_MS, done);
       return;
     }
-    const size = Math.max(16, from.width / 2 - 6);
-    const n = Math.min(count, 12);
-    const sx = from.left + from.width / 2;
-    const sy = from.top + from.height / 2;
-    const tx = to.left + to.width / 2;
-    const ty = to.top + to.height / 2;
-    const arc = Math.max(40, Math.abs(sy - ty) * 0.4 + 30);
+    const fromRect = fromTray.getBoundingClientRect();
+    const cx = fromRect.left + fromRect.width / 2;
+    const cy = fromRect.top + fromRect.height / 2;
 
-    let pending = n;
-    const settle = () => {
-      if (--pending <= 0) done();
-    };
-
-    for (let i = 0; i < n; i++) {
-      const jitter = (i - (n - 1) / 2) * (size * 0.32);
-      const block = h("div", { class: "fly-block" });
-      block.style.width = `${size}px`;
-      block.style.height = `${size}px`;
-      block.style.left = `${sx - size / 2}px`;
-      block.style.top = `${sy - size / 2}px`;
-      document.body.append(block);
-      const anim = block.animate(
-        [
-          { transform: "translate(0px, 0px)", offset: 0 },
-          { transform: `translate(${(tx - sx) * 0.5 + jitter}px, ${(ty - sy) * 0.5 - arc}px)`, offset: 0.5 },
-          { transform: `translate(${tx - sx + jitter}px, ${ty - sy}px)`, offset: 1 },
-        ],
-        { duration: BOUNCE_MS, easing: "cubic-bezier(0.35, 0, 0.3, 1)", delay: i * 22 },
+    // The ten filled cells shrink toward the tray centre as the carry gathers.
+    for (const c of fromTray.querySelectorAll<HTMLElement>(".cell--filled")) {
+      c.style.transformOrigin = "center";
+      c.animate(
+        [{ transform: "scale(1)", opacity: 1 }, { transform: "scale(0.2)", opacity: 0 }],
+        { duration: 220, easing: "cubic-bezier(0.5, 0, 0.75, 0)", fill: "forwards" },
       );
-      const cleanup = () => {
-        block.remove();
-        settle();
-      };
-      anim.onfinish = cleanup;
-      anim.oncancel = cleanup;
     }
+
+    const toRect = this.topTrays[toPlace]?.getBoundingClientRect() ?? null;
+    if (!toRect) {
+      this.after(260, done);
+      return;
+    }
+
+    const size = Math.max(16, fromRect.width / 2 - 6);
+    const tx = toRect.left + toRect.width / 2;
+    const ty = toRect.top + toRect.height / 2;
+    const arc = Math.max(48, Math.abs(cy - ty) * 0.4 + 36);
+
+    const block = h("div", { class: "fly-block" });
+    block.style.width = `${size}px`;
+    block.style.height = `${size}px`;
+    block.style.left = `${cx - size / 2}px`;
+    block.style.top = `${cy - size / 2}px`;
+    document.body.append(block);
+    const anim = block.animate(
+      [
+        { transform: "translate(0px, 0px) scale(0.55)", offset: 0 },
+        { transform: `translate(${(tx - cx) * 0.5}px, ${(ty - cy) * 0.5 - arc}px) scale(1)`, offset: 0.5 },
+        { transform: `translate(${tx - cx}px, ${ty - cy}px) scale(1)`, offset: 1 },
+      ],
+      { duration: BOUNCE_MS, easing: "cubic-bezier(0.35, 0, 0.3, 1)", delay: 110 },
+    );
+    const cleanup = () => {
+      block.remove();
+      done();
+    };
+    anim.onfinish = cleanup;
+    anim.oncancel = cleanup;
   }
 
   private reportInvalidColumn(correctPlace: number): void {
@@ -789,6 +781,10 @@ export class ProblemView {
 
     const frame = tray.querySelector<HTMLElement>(".ten-frame");
     const rowGap = frame ? getComputedStyle(frame).rowGap : "0px";
+    // The ghost lives on <body>, outside the board that defines the responsive
+    // cell size, so pin its cloned cells to the board's current cell size.
+    const sampleCell = tray.querySelector<HTMLElement>(".cell");
+    if (sampleCell) ghost.style.setProperty("--cell", `${sampleCell.getBoundingClientRect().width}px`);
 
     const cols: { el: HTMLElement; maxDy: number }[] = [];
     let overall = 0;

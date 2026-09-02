@@ -55,15 +55,25 @@ describe("generateProblem", () => {
     }
   });
 
-  it("orientation and within-place never require regrouping", () => {
+  it("every generated exercise carries at least once (a column over ten)", () => {
     for (const level of LEVELS) {
-      for (let seed = 0; seed < 200; seed++) {
-        for (const stage of ["orientation", "within-place"] as const) {
+      for (let seed = 0; seed < 300; seed++) {
+        for (const stage of ["orientation", "within-place", "one-exchange", "mixed"] as const) {
           const p = generateProblem(level, seed, stage);
-          for (const s of columnSums(p.top, p.bottom, level)) {
-            expect(s).toBeLessThanOrEqual(9);
-          }
+          const carries = columnSums(p.top, p.bottom, level).filter((s) => s > 10).length;
+          expect(carries).toBeGreaterThanOrEqual(1);
         }
+      }
+    }
+  });
+
+  it("never carries in the leftmost column of a 4-digit exercise", () => {
+    for (let seed = 0; seed < 400; seed++) {
+      for (const stage of ["orientation", "within-place", "one-exchange", "mixed"] as const) {
+        const p = generateProblem(3, seed, stage);
+        // The thousands place is capped so that even a carry arriving from the
+        // hundreds can never push it to ten — no fifth column ever appears.
+        expect(digitAt(p.top, 3) + digitAt(p.bottom, 3)).toBeLessThanOrEqual(8);
       }
     }
   });
@@ -84,6 +94,21 @@ describe("generateProblem", () => {
         const p = generateProblem(level, seed, "mixed");
         const carries = columnSums(p.top, p.bottom, level).filter((s) => s >= 10).length;
         expect(carries).toBeGreaterThanOrEqual(1);
+      }
+    }
+  });
+
+  it("never lands a carrying column on exactly ten — carries always overflow past ten", () => {
+    for (const level of LEVELS) {
+      for (let seed = 0; seed < 200; seed++) {
+        for (const stage of ["one-exchange", "mixed"] as const) {
+          const p = generateProblem(level, seed, stage);
+          for (const s of columnSums(p.top, p.bottom, level)) {
+            // A column either stays within a single frame (<= 9) or overflows it
+            // (> 10); an exact ten would fill the tray with nothing left to bounce.
+            expect(s === 10).toBe(false);
+          }
+        }
       }
     }
   });

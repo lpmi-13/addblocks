@@ -8,10 +8,10 @@ export type Phase =
 /**
  * Canonical per-column state.
  *
- * `top` is the stack the learner pours downward. It is not capped: blocks that
- * bounce in from the column to the right can push it past a full frame, and the
- * overflow is drawn hovering above the frame until the column is poured.
- * `bottom` is the destination and holds at most ten (a full frame).
+ * `top` is the stack the learner pours downward: its place digit, plus one for
+ * any carry dropped in from the column to the right. `bottom` is the destination
+ * and always rests below ten — when a pour would fill it to ten, that full frame
+ * compresses into a single carry block and the remainder (0..9) stays behind.
  */
 export interface Column {
   top: number;
@@ -19,22 +19,33 @@ export interface Column {
 }
 
 /** One undoable action. */
-type Op =
-  | { kind: "pour"; from: number; poured: number; bounced: number; createdColumn: boolean }
-  | { kind: "move"; from: number; toBottom: boolean; createdColumn: boolean };
+type Op = {
+  kind: "pour";
+  from: number;
+  prevTop: number;
+  prevBottom: number;
+  carried: number;
+  createdColumn: boolean;
+};
 
-/** Result of pouring or moving, so the UI can animate/announce. */
+/** Result of a pour, so the UI can animate/announce. */
 export interface MoveResult {
   ok: boolean;
   /** Column that was acted on. */
   from: number;
-  /** Blocks that dropped into this column's bottom tray. */
+  /** Blocks that fell from the top stack into this column's bottom tray. */
   poured: number;
-  /** Blocks that bounced left into the next column's top tray. */
-  bounced: number;
-  /** Target column of the bounce, or -1 when nothing bounced. */
+  /** Bottom fill before the pour. */
+  bottomBefore: number;
+  /** Peak bottom fill during the pour — ten when the frame filled and carried. */
+  filledTo: number;
+  /** Bottom fill left after any carry compressed away (this place's digit). */
+  remainder: number;
+  /** 1 when a full ten compressed into a single block that carried left, else 0. */
+  carried: number;
+  /** Target column of the carry, or -1 when nothing carried. */
   to: number;
-  /** True when the bounce spilled into a freshly created leftmost column. */
+  /** True when the carry spilled into a freshly created leftmost column. */
   createdColumn: boolean;
   completed: boolean;
   reason?: "no-piece" | "wrong-phase";
@@ -86,7 +97,7 @@ export class LessonMachine {
     return this._phase === "combining" && (this.columns[place]?.top ?? 0) > 0;
   }
 
-  /** Alias kept for the single-step control. */
+  /** Alias kept for the "Move down" control, which pours the whole stack. */
   canMove(place: number): boolean {
     return this.canPour(place);
   }
@@ -101,8 +112,11 @@ export class LessonMachine {
   }
 
   /**
-   * Pour a whole top stack downward: it fills this column's bottom up to ten,
-   * and any remainder bounces left into the next column's top stack.
+   * Pour a whole top stack down into this column's bottom tray. If the tray fills
+   * to ten, the full ten compress into a single block that carries left into the
+   * next column's top; only the remainder (combined − 10) stays in the bottom.
+   * The carry is always one — a place can hold at most a single ten regardless of
+   * how far past ten the two digits summed.
    */
   pour(place: number): MoveResult {
     if (this._phase !== "combining") {
@@ -111,77 +125,66 @@ export class LessonMachine {
     const col = this.columns[place];
     if (!col || col.top <= 0) return this.fail(place, "no-piece");
 
-    const space = CELLS_PER_TRAY - col.bottom;
-    const poured = Math.min(col.top, space);
-    col.bottom += poured;
-    const bounced = col.top - poured;
+    const bottomBefore = col.bottom;
+    const poured = col.top;
+    const combined = col.top + col.bottom;
     col.top = 0;
+    const filledTo = Math.min(combined, CELLS_PER_TRAY);
 
+    let carried = 0;
     let to = -1;
     let createdColumn = false;
-    if (bounced > 0) {
+    if (combined >= CELLS_PER_TRAY) {
+      // The frame fills to ten and compresses to a single carry block.
+      carried = 1;
+      col.bottom = combined - CELLS_PER_TRAY;
       to = place + 1;
       createdColumn = this.ensureColumn(to);
-      this.columns[to].top += bounced;
-    }
-
-    this.history.push({ kind: "pour", from: place, poured, bounced, createdColumn });
-    const completed = this.checkComplete();
-    return { ok: true, from: place, poured, bounced, to, createdColumn, completed };
-  }
-
-  /** Move a single block down (fine control / keyboard), bouncing if the bottom is full. */
-  move(place: number): MoveResult {
-    if (this._phase !== "combining") {
-      return this.fail(place, "wrong-phase");
-    }
-    const col = this.columns[place];
-    if (!col || col.top <= 0) return this.fail(place, "no-piece");
-
-    let poured = 0;
-    let bounced = 0;
-    let to = -1;
-    let createdColumn = false;
-    if (col.bottom < CELLS_PER_TRAY) {
-      col.top -= 1;
-      col.bottom += 1;
-      poured = 1;
-    } else {
-      to = place + 1;
-      createdColumn = this.ensureColumn(to);
-      col.top -= 1;
       this.columns[to].top += 1;
-      bounced = 1;
+    } else {
+      col.bottom = combined;
     }
 
-    this.history.push({ kind: "move", from: place, toBottom: poured === 1, createdColumn });
+    this.history.push({ kind: "pour", from: place, prevTop: poured, prevBottom: bottomBefore, carried, createdColumn });
     const completed = this.checkComplete();
-    return { ok: true, from: place, poured, bounced, to, createdColumn, completed };
+    return {
+      ok: true,
+      from: place,
+      poured,
+      bottomBefore,
+      filledTo,
+      remainder: col.bottom,
+      carried,
+      to,
+      createdColumn,
+      completed,
+    };
   }
 
   private fail(place: number, reason: "no-piece" | "wrong-phase"): MoveResult {
-    return { ok: false, from: place, poured: 0, bounced: 0, to: -1, createdColumn: false, completed: false, reason };
+    return {
+      ok: false,
+      from: place,
+      poured: 0,
+      bottomBefore: 0,
+      filledTo: 0,
+      remainder: 0,
+      carried: 0,
+      to: -1,
+      createdColumn: false,
+      completed: false,
+      reason,
+    };
   }
 
   /** Reverse the most recent action. */
   undo(): Op | null {
     const op = this.history.pop();
     if (!op) return null;
-    if (op.kind === "pour") {
-      const col = this.columns[op.from];
-      col.bottom -= op.poured;
-      col.top = op.poured + op.bounced;
-      if (op.bounced > 0) this.columns[op.from + 1].top -= op.bounced;
-    } else {
-      const col = this.columns[op.from];
-      if (op.toBottom) {
-        col.bottom -= 1;
-        col.top += 1;
-      } else {
-        this.columns[op.from + 1].top -= 1;
-        col.top += 1;
-      }
-    }
+    const col = this.columns[op.from];
+    col.top = op.prevTop;
+    col.bottom = op.prevBottom;
+    if (op.carried > 0) this.columns[op.from + 1].top -= op.carried;
     if (op.createdColumn) this.dropEmptyTrailingColumns();
     if (this._phase === "complete") this._phase = "combining";
     return op;
@@ -212,10 +215,16 @@ export class LessonMachine {
     return done;
   }
 
-  /** Total number of blocks on the board — conserved across every action. */
-  totalBlocks(): number {
-    let total = 0;
-    for (const c of this.columns) total += c.top + c.bottom;
-    return total;
+  /**
+   * The place-value total the board currently represents. Compressing a full ten
+   * into one carry block preserves it, so this stays equal to `problem.sum` from
+   * the first blocks laid down through to completion.
+   */
+  representedValue(): number {
+    let value = 0;
+    for (let p = 0; p < this.columns.length; p++) {
+      value += (this.columns[p].top + this.columns[p].bottom) * Math.pow(10, p);
+    }
+    return value;
   }
 }
