@@ -1,0 +1,2 @@
+- the "move down" button should move the entire upper element of blocks, similar to how dragging currently does, instead of one filled block at a time.
+- the entire upper element still needs to slide. Currently a subset of the element gets dragged, based on how many of the blocks are filled in the upper element.

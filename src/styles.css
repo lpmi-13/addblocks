@@ -1,0 +1,783 @@
+/* ============================================================
+   Add Blocks — a quiet digital manipulative for place-value addition.
+   Palette and direction follow the product plan (§8).
+   ============================================================ */
+
+:root {
+  --canvas: #f7f9fa; /* warm off-white page */
+  --surface: #eef3f5; /* trays and cards */
+  --surface-2: #e4ecef;
+  --block: #91c7df; /* filled pieces */
+  --block-strong: #4e91b2; /* selected / focus reinforcement */
+  --outline: #78909c; /* empty cells and dividers */
+  --text: #17242b; /* near-black primary text */
+  --text-muted: #52656f; /* secondary labels */
+  --focus: #1f6f95;
+  --danger: #9a4a3f;
+
+  --radius: 14px;
+  --radius-sm: 9px;
+  /* Blocks grow with the viewport but stay bounded by height so the two
+     stacked ten-frames never overflow a short window. */
+  --cell: clamp(26px, min(6.4vw, 5.6vh), 56px);
+  --tray-gap: 0.3rem;
+  --shadow: 0 1px 2px rgba(23, 36, 43, 0.08), 0 6px 18px rgba(23, 36, 43, 0.06);
+
+  --font: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  font-family: var(--font);
+  color: var(--text);
+  background: linear-gradient(160deg, #f7f9fa 0%, #eef3f6 55%, #e6eef2 100%);
+  background-attachment: fixed;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  line-height: 1.4;
+}
+
+#app {
+  display: block;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: absolute;
+  left: 0.5rem;
+  top: -3rem;
+  z-index: 50;
+  background: var(--text);
+  color: var(--canvas);
+  padding: 0.55rem 0.9rem;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  transition: top 0.16s ease;
+}
+.skip-link:focus {
+  top: 0.5rem;
+}
+
+/* ---------------------------------------------------------------- buttons */
+
+.btn {
+  font: inherit;
+  font-weight: 600;
+  min-height: 48px;
+  padding: 0.6rem 1.15rem;
+  border-radius: var(--radius-sm);
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform 0.08s ease, background 0.16s ease, box-shadow 0.16s ease,
+    border-color 0.16s ease, color 0.16s ease;
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.btn--primary {
+  background: var(--text);
+  color: var(--canvas);
+  box-shadow: var(--shadow);
+}
+.btn--primary:not(:disabled):hover {
+  background: #24363f;
+}
+.btn--ghost {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--outline);
+}
+.btn--ghost:not(:disabled):hover {
+  background: var(--surface);
+  border-color: var(--text-muted);
+}
+
+:where(button, a, input, [tabindex]):focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ---------------------------------------------------------------- screens */
+
+.screen {
+  max-width: min(1180px, 100%);
+  margin: 0 auto;
+  padding: clamp(1rem, 3vw, 2.2rem) clamp(0.9rem, 4vw, 2.6rem) 3rem;
+}
+
+/* ---- level selection ---- */
+
+.level-head {
+  text-align: center;
+  margin-bottom: clamp(1.2rem, 4vw, 2rem);
+}
+.level-head__title {
+  font-size: clamp(1.7rem, 6vw, 2.6rem);
+  margin: 0.4rem 0 0.3rem;
+  letter-spacing: -0.01em;
+}
+.level-head__sub {
+  color: var(--text-muted);
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.levels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: clamp(0.7rem, 2vw, 1.1rem);
+}
+
+.level-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  text-align: left;
+  padding: 1.1rem 1.2rem 1.2rem;
+  min-height: 116px;
+  background: var(--surface);
+  border: 2px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  font: inherit;
+  color: var(--text);
+  transition: transform 0.12s ease, border-color 0.16s ease, background 0.16s ease;
+}
+.level-card:hover {
+  transform: translateY(-2px);
+  background: #fff;
+  border-color: var(--block);
+}
+.level-card--current {
+  border-color: var(--block-strong);
+}
+.level-card__index {
+  position: absolute;
+  top: 0.7rem;
+  right: 0.9rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.level-card__name {
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+.level-card__range {
+  font-size: 1.05rem;
+  color: var(--block-strong);
+  font-weight: 600;
+}
+.level-card__desc {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  margin-top: 0.35rem;
+}
+.level-card__badge {
+  margin-top: 0.6rem;
+  align-self: flex-start;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--block-strong);
+  background: #dcecf3;
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+}
+
+/* ---------------------------------------------------------------- menu */
+
+/* A minimal hamburger fixed to the upper-right corner, on every screen. */
+.menu-toggle {
+  position: fixed;
+  top: clamp(0.6rem, 1.6vw, 1.1rem);
+  right: clamp(0.6rem, 1.6vw, 1.1rem);
+  z-index: 70;
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--surface-2);
+  background: rgba(255, 255, 255, 0.82);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  border-radius: 13px;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  transition: background 0.16s ease, box-shadow 0.16s ease, transform 0.08s ease;
+}
+.menu-toggle:hover {
+  background: #fff;
+  box-shadow: 0 2px 6px rgba(23, 36, 43, 0.12), 0 10px 24px rgba(23, 36, 43, 0.1);
+}
+.menu-toggle:active {
+  transform: translateY(1px);
+}
+.menu-toggle__bars {
+  position: relative;
+  width: 20px;
+  height: 14px;
+}
+.menu-toggle__bar {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--text);
+  transition: transform 0.22s ease, opacity 0.16s ease;
+}
+.menu-toggle__bar:nth-child(1) {
+  top: 0;
+}
+.menu-toggle__bar:nth-child(2) {
+  top: 6px;
+}
+.menu-toggle__bar:nth-child(3) {
+  top: 12px;
+}
+.menu-toggle--open .menu-toggle__bar:nth-child(1) {
+  transform: translateY(6px) rotate(45deg);
+}
+.menu-toggle--open .menu-toggle__bar:nth-child(2) {
+  opacity: 0;
+}
+.menu-toggle--open .menu-toggle__bar:nth-child(3) {
+  transform: translateY(-6px) rotate(-45deg);
+}
+
+.menu-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(23, 36, 43, 0.16);
+  animation: menu-fade 0.16s ease;
+}
+
+.menu-panel {
+  position: fixed;
+  top: clamp(3.4rem, 6vw, 4rem);
+  right: clamp(0.6rem, 1.6vw, 1.1rem);
+  z-index: 71;
+  width: min(340px, calc(100vw - 1.2rem));
+  background: var(--canvas);
+  border: 1px solid var(--surface-2);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 44px rgba(23, 36, 43, 0.24);
+  padding: 0.2rem 1.1rem 1rem;
+  transform-origin: top right;
+  animation: menu-pop 0.18s ease;
+}
+.menu-panel__title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 0.9rem 0.2rem 0.1rem;
+}
+.menu-panel__body {
+  display: grid;
+  gap: 0.1rem;
+}
+.menu-panel__body .switch:first-child {
+  border-top: none;
+}
+@keyframes menu-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes menu-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 0.2rem;
+  border-top: 1px solid var(--surface-2);
+}
+.switch__label {
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+}
+.switch__name {
+  font-weight: 600;
+}
+.switch__desc {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+.switch__control {
+  position: relative;
+  flex: none;
+}
+.switch__input {
+  position: absolute;
+  inset: 0;
+  z-index: 1; /* keep the input above the track so the visible switch is clickable */
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+.switch__track {
+  display: block;
+  width: 52px;
+  height: 30px;
+  border-radius: 999px;
+  background: var(--outline);
+  transition: background 0.16s ease;
+  position: relative;
+}
+.switch__track::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.16s ease;
+}
+.switch__input:checked + .switch__track {
+  background: var(--block-strong);
+}
+.switch__input:checked + .switch__track::after {
+  transform: translateX(22px);
+}
+.switch__input:focus-visible + .switch__track {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------- problem */
+
+.screen--problem {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: clamp(0.8rem, 2.5vw, 1.6rem);
+  min-height: 100dvh;
+}
+
+.problem-head {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.6rem;
+}
+/* Tablet band: the layout is near the viewport's right edge and tall enough to
+   sit at the top, so reserve room for the floating menu beside the equation. */
+@media (min-width: 621px) and (max-width: 1240px) {
+  .problem-head {
+    padding-right: 3.5rem;
+  }
+}
+/* Phones: stack the header so the top-right corner is left free for the menu. */
+@media (max-width: 620px) {
+  .problem-head {
+    grid-template-columns: 1fr auto;
+    row-gap: 0.15rem;
+  }
+  .problem-head > .btn {
+    grid-area: 1 / 1;
+    justify-self: start;
+  }
+  .problem-head__title {
+    grid-area: 2 / 1 / 3 / 3;
+  }
+  .problem-head__eq {
+    grid-area: 3 / 1 / 4 / 3;
+    justify-self: center;
+  }
+}
+.problem-head__title {
+  font-size: clamp(1rem, 3.2vw, 1.35rem);
+  margin: 0;
+  text-align: center;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.problem-head__eq {
+  justify-self: end;
+  font-size: clamp(1rem, 3.4vw, 1.4rem);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.prompt {
+  margin: 0;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 1.02rem;
+  min-height: 1.5em;
+}
+
+/* board */
+.board-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.4rem 0.2rem 0.8rem;
+  -webkit-overflow-scrolling: touch;
+}
+.board {
+  display: grid;
+  justify-content: center;
+  align-items: center;
+  gap: clamp(0.35rem, 1.6vw, 0.9rem);
+  width: max-content;
+  margin: 0 auto;
+  min-width: 100%;
+  touch-action: pan-y;
+}
+.screen--problem[data-phase="combining"] .board,
+.screen--problem[data-phase="complete"] .board {
+  touch-action: none;
+}
+
+.grid-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.corner {
+  display: block;
+  width: 1px;
+  height: 1px;
+}
+.col-label {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  padding: 0.1rem 0.35rem;
+  border-radius: 6px;
+}
+.col-label--flash {
+  animation: label-flash 1.1s ease;
+}
+@keyframes label-flash {
+  0%,
+  100% {
+    background: transparent;
+    color: var(--text-muted);
+  }
+  25%,
+  60% {
+    background: #dcecf3;
+    color: var(--block-strong);
+  }
+}
+.operator {
+  font-size: clamp(1.6rem, 6vw, 2.6rem);
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.rule {
+  height: 3px;
+  background: var(--outline);
+  border-radius: 2px;
+  margin-top: 0.2rem;
+  align-self: stretch;
+}
+/* Top stacks bottom-align so their frames line up (any overflow blocks hover
+   above); bottom stacks top-align so their frames line up just beneath. */
+.addend-cell--top {
+  align-self: end;
+}
+.addend-cell--bottom {
+  align-self: start;
+}
+
+/* each column: an optional number label plus a ten-frame tray */
+.stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+}
+.stack__num {
+  font-size: clamp(1rem, 3.4vw, 1.5rem);
+  font-weight: 700;
+  line-height: 1;
+  min-height: 1em;
+  color: var(--block-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+/* trays are buttons wrapping a ten-frame */
+.tray {
+  font: inherit;
+  border: 2px solid transparent;
+  background: transparent;
+  padding: 0.35rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+  display: inline-block;
+}
+.tray--bottom {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--surface-2);
+}
+.tray--top:not(.tray--empty):hover {
+  background: rgba(145, 199, 223, 0.18);
+}
+/* the entire top stack is one grab surface (cursor inherits to the cells) */
+.tray--top:not(.tray--empty),
+.stack--top .hover-blocks {
+  cursor: grab;
+  touch-action: none;
+}
+.tray--empty {
+  cursor: default;
+}
+.tray--selected {
+  border-color: var(--block-strong);
+  background: rgba(78, 145, 178, 0.12);
+}
+.tray--target {
+  border-color: var(--block-strong);
+  box-shadow: 0 0 0 3px rgba(78, 145, 178, 0.25);
+}
+.tray--hover {
+  background: rgba(78, 145, 178, 0.2);
+  border-color: var(--focus);
+}
+.tray--lifted {
+  opacity: 0.35;
+}
+
+/* Blocks stack vertically: two columns, filling top rows first. A count of 5
+   fills both cells of the top two rows and the first cell of the third row. */
+.ten-frame {
+  display: grid;
+  grid-template-columns: repeat(2, var(--cell));
+  grid-template-rows: repeat(5, var(--cell));
+  gap: var(--tray-gap);
+}
+
+.cell {
+  width: var(--cell);
+  height: var(--cell);
+  border-radius: 7px;
+  border: 2px solid transparent;
+}
+.cell--empty {
+  border: 2px dashed var(--outline);
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 5px,
+    rgba(120, 144, 156, 0.09) 5px,
+    rgba(120, 144, 156, 0.09) 7px
+  );
+}
+.cell--filled {
+  background: var(--block);
+  border-color: var(--block-strong);
+  box-shadow: inset 0 -3px 0 rgba(78, 145, 178, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+/* cursor/touch affordance now lives on the whole top tray (see above) */
+.tray--selected .cell--filled {
+  background: var(--block-strong);
+  border-color: #356b86;
+}
+
+/* blocks that spilled past a full top frame, hovering above it */
+.hover-blocks {
+  display: grid;
+  grid-template-columns: repeat(2, var(--cell));
+  gap: var(--tray-gap);
+  margin-bottom: 0.3rem;
+  animation: hover-bob 1.7s ease-in-out infinite;
+}
+.cell--hover {
+  box-shadow: 0 5px 12px rgba(23, 36, 43, 0.2), inset 0 -3px 0 rgba(78, 145, 178, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+@keyframes hover-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+/* a block dropping into the bottom tray as a stack is poured */
+.cell--pour-in {
+  animation: pour-in 340ms cubic-bezier(0.2, 0.85, 0.3, 1) both;
+}
+@keyframes pour-in {
+  0% {
+    transform: translateY(-160%);
+    opacity: 0;
+  }
+  72% {
+    transform: translateY(6%);
+    opacity: 1;
+  }
+  100% {
+    transform: none;
+  }
+}
+
+/* poured cells wait, hidden, while the dragged stack glides down over them,
+   then fade in as the ghost fades out — so the blocks slide into place */
+.cell--settling {
+  opacity: 0;
+}
+.cell--land {
+  animation: cell-land 140ms ease-out both;
+}
+@keyframes cell-land {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* whole-stack drag ghost: a wrapper holding one movable column layer per column,
+   so each column can stop on its own pile while the other keeps sliding. */
+.tray-ghost {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0.94;
+}
+.tray-ghost__col {
+  will-change: transform;
+}
+/* the lifted blocks carry the drop-shadow (there is no outer frame now) */
+.tray-ghost__col .cell--filled {
+  box-shadow: 0 12px 26px rgba(23, 36, 43, 0.28), inset 0 -3px 0 rgba(78, 145, 178, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+/* a leftover block arcing to the next column's top */
+.fly-block {
+  position: fixed;
+  z-index: 65;
+  pointer-events: none;
+  border-radius: 7px;
+  background: var(--block);
+  border: 2px solid var(--block-strong);
+  box-shadow: 0 6px 16px rgba(23, 36, 43, 0.28), inset 0 -3px 0 rgba(78, 145, 178, 0.35);
+  will-change: transform;
+}
+
+/* result / completion */
+.result {
+  text-align: center;
+  padding: 0.4rem 0;
+  animation: fade-up 0.4s ease;
+}
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.result__praise {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 1rem;
+}
+.result__equation {
+  margin: 0.2rem 0 0;
+  font-size: clamp(2rem, 9vw, 3.4rem);
+  font-weight: 800;
+  letter-spacing: 0.005em;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  justify-content: center;
+  align-items: center;
+  padding-top: 0.2rem;
+}
+
+/* ---------------------------------------------------------------- prefs */
+
+@media (prefers-contrast: more) {
+  :root {
+    --block: #6fb2cf;
+    --outline: #445661;
+    --text-muted: #33454e;
+  }
+  .cell--filled {
+    border-width: 3px;
+  }
+  .btn--ghost {
+    border-color: var(--text);
+  }
+}
+
+.reduced-motion *,
+.reduced-motion *::before,
+.reduced-motion *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
