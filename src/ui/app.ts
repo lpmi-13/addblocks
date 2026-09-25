@@ -1,3 +1,4 @@
+import { showIntro } from "./intro";
 import { renderLevelSelect } from "./levelSelect";
 import { Menu } from "./menu";
 import { ProblemView } from "./problemView";
@@ -6,7 +7,9 @@ import { generateProblem, stageForIndex } from "../core/problemGenerator";
 import { randomSeed } from "../core/rng";
 import type { Level } from "../core/types";
 import {
+  hasSeenIntro,
   loadLevel,
+  markIntroSeen,
   loadPreferences,
   savePreferences,
   saveLevel,
@@ -87,6 +90,11 @@ export class App {
       onNew: () => this.startProblem(),
     });
     this.view.mount();
+
+    // Show the drag tutorial the first time a board is on screen.
+    if (!hasSeenIntro()) {
+      showIntro(this.root, { reducedMotion: this.prefs.reducedMotion, onDismiss: markIntroSeen });
+    }
   }
 
   private nextProblem(): void {

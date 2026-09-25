@@ -60,3 +60,14 @@ export function loadLevel(): Level | null {
 export function saveLevel(level: Level): void {
   write(LEVEL_KEY, level);
 }
+
+const INTRO_KEY = "addblocks.introSeen.v1";
+
+/** Whether the learner has dismissed the first-visit drag tutorial. */
+export function hasSeenIntro(): boolean {
+  return read<boolean>(INTRO_KEY) === true;
+}
+
+export function markIntroSeen(): void {
+  write(INTRO_KEY, true);
+}

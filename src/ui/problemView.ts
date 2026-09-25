@@ -39,6 +39,10 @@ export class ProblemView {
   private timers: number[] = [];
   private pendingFocus: FocusKey | null = null;
   private invalidStreak = 0;
+  /** Column whose pour is mid-animation; its total waits until it lands. */
+  private pouringPlace: number | null = null;
+  /** Columns whose totals were on screen at the last render. */
+  private shownSums = new Set<number>();
 
   private activePointerId: number | null = null;
   private drag: {
@@ -183,6 +187,22 @@ export class ProblemView {
     rule.classList.add("rule");
     this.boardEl.append(rule);
 
+    // Total each column beneath the rule once it has been poured. While a pour is
+    // still animating (`visual`), hold that column's total back until it settles.
+    const shown = new Set<number>();
+    for (let p = count - 1; p >= 0; p--) {
+      if (!this.machine.isSettled(p) || p === this.pouringPlace) continue;
+      const sum = h("span", { class: "col-sum", text: String(cols[p].bottom) });
+      // Only animate totals that are newly appearing, not ones redrawn by a re-render.
+      if (!this.shownSums.has(p)) sum.classList.add("col-sum--new");
+      const cell = this.gridCell(5, count + 1 - p, sum);
+      cell.dataset.place = String(p);
+      cell.classList.add("sum-cell");
+      this.boardEl.append(cell);
+      shown.add(p);
+    }
+    this.shownSums = shown;
+
     this.applyTargetHighlight();
     this.restorePendingFocus();
   }
@@ -308,7 +328,6 @@ export class ProblemView {
 
     this.controlsEl.append(
       this.button("Next problem", "primary", () => this.handlers.onNext(), "next"),
-      this.button("Change level", "ghost", () => this.handlers.onChangeLevel(), "change-level"),
     );
   }
 
@@ -324,17 +343,16 @@ export class ProblemView {
   }
 
   private updatePrompt(): void {
-    let text: string;
-    if (this.machine.phase === "combining") {
-      const sel = this.machine.selectedPlace;
-      text =
-        sel != null
-          ? `Pour the top ${placeName(sel)} stack into the ${placeName(sel)} tray, or press Move down.`
-          : "Drag a top stack down into its tray — fill ten and it carries one block to the next column on the left.";
-    } else {
-      text = "You combined all the blocks.";
+    const sel = this.machine.selectedPlace;
+    if (this.machine.phase === "combining" && sel == null) {
+      // The first-visit intro teaches the drag visually; keep the instruction for screen readers.
+      this.promptEl.replaceChildren(h("span", { class: "sr-only", text: "Drag a top stack down into its tray." }));
+      return;
     }
-    this.promptEl.textContent = text;
+    this.promptEl.textContent =
+      this.machine.phase === "combining"
+        ? `Pour the top ${placeName(sel!)} stack into the ${placeName(sel!)} tray, or press Move down.`
+        : "You combined all the blocks.";
   }
 
   /* --------------------------------------------------------------- selection */
@@ -426,6 +444,7 @@ export class ProblemView {
 
     const finalize = () => {
       this.animating = false;
+      this.pouringPlace = null;
       this.pendingFocus = this.firstMovableFocus();
       this.renderBoard();
       this.renderControls();
@@ -441,6 +460,7 @@ export class ProblemView {
     }
 
     this.animating = true;
+    this.pouringPlace = result.from;
 
     // Hold an intermediate picture while the blocks pour in: the poured column's
     // bottom shows its peak fill (a full ten when it will carry), and the carry
@@ -658,13 +678,17 @@ export class ProblemView {
     this.resultEl.hidden = false;
     this.resultEl.append(
       h("p", { class: "result__praise", text: "You combined all the blocks!" }),
-      h("p", { class: "result__equation", text: this.equationText() }),
+      h("p", { class: "result__equation", text: this.completedEquationText() }),
     );
   }
 
   private equationText(): string {
     const { top, bottom } = this.machine.problem;
     return `${formatNumber(top)} + ${formatNumber(bottom)}`;
+  }
+
+  private completedEquationText(): string {
+    return `${this.equationText()} = ${formatNumber(this.machine.problem.sum)}`;
   }
 
   private spokenAddends(): string {

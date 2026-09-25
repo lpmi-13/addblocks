@@ -112,3 +112,24 @@ describe("LessonMachine — undo & completion", () => {
     }
   });
 });
+
+describe("LessonMachine — isSettled", () => {
+  it("settles a column once poured, and unsettles it if a carry lands on top", () => {
+    const m = new LessonMachine(problem(18, 15)); // 18 + 15 = 33
+    expect(m.isSettled(0)).toBe(false);
+    m.pour(1); // tens first: 1 + 1 = 2, settled for now
+    expect(m.isSettled(1)).toBe(true);
+    m.pour(0); // 8 + 5 carries one into the tens top
+    expect(m.isSettled(0)).toBe(true);
+    expect(m.isSettled(1)).toBe(false);
+    m.pour(1);
+    expect(m.isSettled(1)).toBe(true);
+  });
+
+  it("settles a column with no top blocks only once every column to its right is settled", () => {
+    const m = new LessonMachine(problem(4, 23)); // tens top is 0
+    expect(m.isSettled(1)).toBe(false);
+    m.pour(0);
+    expect(m.isSettled(1)).toBe(true);
+  });
+});

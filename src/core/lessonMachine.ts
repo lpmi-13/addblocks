@@ -201,6 +201,18 @@ export class LessonMachine {
     }
   }
 
+  /**
+   * True once this column's digit in the answer is final: its top stack is
+   * empty and either the learner has poured it, or it never had blocks to pour
+   * and every column to its right is settled (so no carry can still arrive).
+   */
+  isSettled(place: number): boolean {
+    if ((this.columns[place]?.top ?? 1) !== 0) return false;
+    if (this.history.some((op) => op.from === place)) return true;
+    for (let p = 0; p < place; p++) if (this.columns[p].top !== 0) return false;
+    return true;
+  }
+
   canUndo(): boolean {
     return this.history.length > 0;
   }

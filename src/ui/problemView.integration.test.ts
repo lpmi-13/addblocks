@@ -82,6 +82,27 @@ describe("ProblemView — pour & bounce flow", () => {
     expect(q(root, ".result__praise").textContent).toContain("combined all the blocks");
   });
 
+  it("shows each column's total beneath the rule as soon as it is poured", () => {
+    const { root } = mount(8, 5); // 8 + 5 = 13
+    const sums = () => [...root.querySelectorAll<HTMLElement>(".sum-cell")].map((c) => [c.dataset.place, c.textContent]);
+    expect(sums()).toEqual([]);
+    pour(root, 0);
+    expect(sums()).toEqual([["0", "3"]]); // ones settled; the carried ten still waits on top
+    pour(root, 1);
+    expect(sums()).toEqual([
+      ["1", "1"],
+      ["0", "3"],
+    ]);
+    expect(root.querySelector('[data-focus="change-level"]')).toBeNull();
+  });
+
+  it("finishes the result line with the answer", () => {
+    const { root } = mount(8, 5);
+    pour(root, 0);
+    pour(root, 1);
+    expect(q(root, ".result__equation").textContent).toBe("8 + 5 = 13");
+  });
+
   it("pours the whole top stack with Move down, carrying one block left", () => {
     const { root, machine } = mount(8, 5); // 8 + 5 = 13
     moveDown(root, 0); // whole stack, not one block: fills to ten, carries one
