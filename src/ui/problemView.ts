@@ -10,6 +10,10 @@ const DROP_PADDING = 30; // px of forgiveness around a drop target
 const POUR_MS = 340;
 const SLIDE_MS = 220; // whole-stack glide from the release point into the bottom tray
 const BOUNCE_MS = 560;
+const GATHER_MS = 520; // a full ten lifting toward the viewer and drawing together
+const MERGE_MS = 220; // the gathered ten fusing into one carry block
+const DRIFT_MS = 380; // leftovers above a carried ten settling down into the frame
+const LIFT_SCALE = 1.45; // how far toward the viewer the ten swell before merging
 
 interface Handlers {
   onChangeLevel: () => void;
@@ -36,6 +40,8 @@ export class ProblemView {
   private bottomTrays: (HTMLElement | null)[] = [];
 
   private animating = false;
+  /** Blocks past a full ten, held stacked above the frame while the carry plays. */
+  private leftovers: HTMLElement[] = [];
   private timers: number[] = [];
   private pendingFocus: FocusKey | null = null;
   private invalidStreak = 0;
@@ -134,6 +140,7 @@ export class ProblemView {
   destroy(): void {
     this.cancelActiveManipulation();
     this.clearTimers();
+    this.clearLeftovers();
     this.detachWindowListeners();
   }
 
@@ -443,6 +450,7 @@ export class ProblemView {
     this.announceAction(result);
 
     const finalize = () => {
+      this.clearLeftovers();
       this.animating = false;
       this.pouringPlace = null;
       this.pendingFocus = this.firstMovableFocus();
@@ -476,7 +484,7 @@ export class ProblemView {
     // Once the pour has landed, a full frame compresses into one carry block that
     // arcs into the next column's top; then we settle to the canonical state.
     const carryThenFinish = () => {
-      if (carrying) this.compressAndCarry(result.from, result.to, finalize);
+      if (carrying) this.compressAndCarry(result, finalize);
       else finalize();
     };
 
@@ -488,6 +496,7 @@ export class ProblemView {
 
     // Tap / keyboard pour: blocks drop into the bottom tray from above.
     this.markPourIn(result.from, result.bottomBefore, result.filledTo);
+    this.placeLeftovers(result, true);
     this.after(POUR_MS, carryThenFinish);
   }
 
@@ -513,6 +522,8 @@ export class ProblemView {
 
     const layers = Array.from(ghost.querySelectorAll<HTMLElement>(".tray-ghost__col"));
     const land = () => {
+      // Blocks past ten stay where the ghost left them, piled above the frame.
+      this.placeLeftovers(result, false);
       // Reveal the settled cells as the ghost fades out over them; the overlap
       // hides the top→bottom fill re-arrangement.
       for (const c of poured) {
@@ -580,60 +591,206 @@ export class ProblemView {
   }
 
   /**
-   * A full frame of ten just landed in `fromPlace`'s bottom tray. Collapse those
-   * ten cells into a single block that arcs up-left into `toPlace`'s top tray —
-   * the carry. The remainder is revealed by the re-render that `done` triggers.
+   * A full frame of ten just landed in `fromPlace`'s bottom tray. The ten blocks
+   * lift off the frame toward the viewer, gather into the tray centre and fuse
+   * into one block, and that single block — now worth ten — arcs up-left into
+   * `toPlace`'s top tray. Only then do any leftover blocks piled above the frame
+   * drift down into it.
    */
-  private compressAndCarry(fromPlace: number, toPlace: number, done: () => void): void {
+  private compressAndCarry(result: MoveResult, done: () => void): void {
+    const fromPlace = result.from;
+    const toPlace = result.to;
     const fromTray = this.bottomTrays[fromPlace];
-    if (!fromTray || !this.canAnimateGhost()) {
+    const cells = fromTray ? Array.from(fromTray.querySelectorAll<HTMLElement>(".cell--filled")) : [];
+    if (!fromTray || !cells.length || !this.canAnimateGhost()) {
       this.after(BOUNCE_MS, done);
       return;
     }
     const fromRect = fromTray.getBoundingClientRect();
     const cx = fromRect.left + fromRect.width / 2;
     const cy = fromRect.top + fromRect.height / 2;
+    const size = cells[0].getBoundingClientRect().width;
 
-    // The ten filled cells shrink toward the tray centre as the carry gathers.
-    for (const c of fromTray.querySelectorAll<HTMLElement>(".cell--filled")) {
-      c.style.transformOrigin = "center";
-      c.animate(
-        [{ transform: "scale(1)", opacity: 1 }, { transform: "scale(0.2)", opacity: 0 }],
-        { duration: 220, easing: "cubic-bezier(0.5, 0, 0.75, 0)", fill: "forwards" },
+    // Lift: each block is swapped for a free-floating copy that swells toward the
+    // viewer while drawing slightly inward, then they all converge on the centre.
+    const BEVEL = ", inset 0 -3px 0 rgba(78, 145, 178, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.5)";
+    const clones: HTMLElement[] = [];
+    for (const c of cells) {
+      const r = c.getBoundingClientRect();
+      const clone = c.cloneNode(false) as HTMLElement;
+      clone.classList.remove("cell--pour-in", "cell--land");
+      clone.classList.add("merge-cell");
+      clone.style.left = `${r.left}px`;
+      clone.style.top = `${r.top}px`;
+      clone.style.width = `${r.width}px`;
+      clone.style.height = `${r.height}px`;
+      document.body.append(clone);
+      clones.push(clone);
+      // Leave an empty slot behind so the frame's ten places stay visible.
+      c.classList.replace("cell--filled", "cell--empty");
+
+      const dx = cx - (r.left + r.width / 2);
+      const dy = cy - (r.top + r.height / 2);
+      const order = Number(c.dataset.order) || 0;
+      clone.animate(
+        [
+          { transform: "translate(0px, 0px) scale(1)", boxShadow: `0 2px 4px rgba(23, 36, 43, 0.15)${BEVEL}`, offset: 0 },
+          {
+            transform: `translate(${dx * 0.18}px, ${dy * 0.18 - 6}px) scale(${LIFT_SCALE})`,
+            boxShadow: `0 18px 30px rgba(23, 36, 43, 0.22)${BEVEL}`,
+            offset: 0.55,
+          },
+          {
+            // Ten shadows stacking at the centre would pool into a dark blob, so
+            // they fade out as the blocks converge; the merged block brings its own.
+            transform: `translate(${dx}px, ${dy - 6}px) scale(${LIFT_SCALE})`,
+            boxShadow: `0 18px 30px rgba(23, 36, 43, 0)${BEVEL}`,
+            offset: 1,
+          },
+        ],
+        { duration: GATHER_MS, delay: order * 14, easing: "cubic-bezier(0.45, 0, 0.4, 1)", fill: "forwards" },
       );
     }
 
-    const toRect = this.topTrays[toPlace]?.getBoundingClientRect() ?? null;
-    if (!toRect) {
-      this.after(260, done);
-      return;
-    }
-
-    const size = Math.max(16, fromRect.width / 2 - 6);
-    const tx = toRect.left + toRect.width / 2;
-    const ty = toRect.top + toRect.height / 2;
-    const arc = Math.max(48, Math.abs(cy - ty) * 0.4 + 36);
-
-    const block = h("div", { class: "fly-block" });
+    // Merge: once the stack has gathered, the copies vanish under a single block
+    // that thumps into being where they met.
+    const block = h("div", { class: "fly-block fly-block--lifted" });
     block.style.width = `${size}px`;
     block.style.height = `${size}px`;
     block.style.left = `${cx - size / 2}px`;
     block.style.top = `${cy - size / 2}px`;
-    document.body.append(block);
-    const anim = block.animate(
-      [
-        { transform: "translate(0px, 0px) scale(0.55)", offset: 0 },
-        { transform: `translate(${(tx - cx) * 0.5}px, ${(ty - cy) * 0.5 - arc}px) scale(1)`, offset: 0.5 },
-        { transform: `translate(${tx - cx}px, ${ty - cy}px) scale(1)`, offset: 1 },
-      ],
-      { duration: BOUNCE_MS, easing: "cubic-bezier(0.35, 0, 0.3, 1)", delay: 110 },
-    );
+    block.style.opacity = "0";
+
+    const toRect = this.topTrays[toPlace]?.getBoundingClientRect() ?? null;
     const cleanup = () => {
+      for (const c of clones) c.remove();
       block.remove();
       done();
     };
-    anim.onfinish = cleanup;
-    anim.oncancel = cleanup;
+
+    const gathered = GATHER_MS + (CELLS_PER_TRAY - 1) * 14;
+    this.after(gathered, () => {
+      document.body.append(block);
+      block.style.opacity = "1";
+      for (const c of clones) c.remove();
+      const merge = block.animate(
+        [
+          { transform: `translate(0px, -6px) scale(${LIFT_SCALE})`, filter: "brightness(1.25)" },
+          { transform: `translate(0px, -6px) scale(${LIFT_SCALE * 1.22})`, filter: "brightness(1.12)", offset: 0.4 },
+          { transform: `translate(0px, -6px) scale(${LIFT_SCALE})`, filter: "brightness(1)" },
+        ],
+        { duration: MERGE_MS, easing: "ease-out", fill: "forwards" },
+      );
+      merge.onfinish = () => {
+        // The ten have gone; the leftovers piled above settle into the emptied frame.
+        let pending = 2;
+        const oneDone = () => { if (--pending <= 0) cleanup(); };
+        this.driftLeftovers(fromTray, oneDone);
+        if (!toRect) {
+          oneDone();
+          return;
+        }
+        // Fly: the merged block arcs over to the next column, settling back to
+        // block size as it lands on that column's top stack.
+        const tx = toRect.left + toRect.width / 2;
+        const ty = toRect.top + toRect.height / 2;
+        const arc = Math.max(48, Math.abs(cy - ty) * 0.4 + 36);
+        const fly = block.animate(
+          [
+            { transform: `translate(0px, -6px) scale(${LIFT_SCALE})`, offset: 0 },
+            { transform: `translate(${(tx - cx) * 0.5}px, ${(ty - cy) * 0.5 - arc}px) scale(${LIFT_SCALE})`, offset: 0.5 },
+            { transform: `translate(${tx - cx}px, ${ty - cy}px) scale(1)`, offset: 1 },
+          ],
+          { duration: BOUNCE_MS, easing: "cubic-bezier(0.35, 0, 0.3, 1)", fill: "forwards" },
+        );
+        fly.onfinish = oneDone;
+        fly.oncancel = oneDone;
+      };
+      merge.oncancel = cleanup;
+    });
+  }
+
+  /**
+   * Show the blocks past a full ten stacked above `result.from`'s bottom frame,
+   * where the pour piled them: each column of the pile keeps the blocks that fell
+   * into it (the bottom fills right-first, the top stack left-first), so this
+   * matches where the dragged stack came to rest. `dropIn` animates them falling
+   * in alongside a tap pour.
+   */
+  private placeLeftovers(result: MoveResult, dropIn: boolean): void {
+    this.clearLeftovers();
+    const tray = this.bottomTrays[result.from];
+    if (!tray || result.carried === 0 || result.remainder === 0) return;
+    const b = result.bottomBefore;
+    const t = result.poured;
+    const heights = [Math.floor(b / 2) + Math.ceil(t / 2), Math.ceil(b / 2) + Math.floor(t / 2)];
+    const ROWS = CELLS_PER_TRAY / 2;
+    // Lowest first, right column before left — the order they will refill the frame.
+    const slots: { level: number; col: number }[] = [];
+    for (let level = ROWS; level < Math.max(...heights); level++) {
+      for (const col of [1, 0]) if (level < heights[col]) slots.push({ level, col });
+    }
+    for (const slot of slots) {
+      const r = this.pileSlot(tray, slot.level, slot.col);
+      if (!r) continue;
+      const el = h("div", { class: "cell cell--filled merge-cell leftover-cell", attrs: { "aria-hidden": "true" } });
+      el.style.left = `${r.left}px`;
+      el.style.top = `${r.top}px`;
+      el.style.width = `${r.size}px`;
+      el.style.height = `${r.size}px`;
+      if (dropIn) el.classList.add("cell--pour-in");
+      document.body.append(el);
+      this.leftovers.push(el);
+    }
+  }
+
+  /** Let the leftover blocks fall from above the frame into its lowest slots. */
+  private driftLeftovers(tray: HTMLElement, done: () => void): void {
+    if (!this.leftovers.length) {
+      done();
+      return;
+    }
+    let pending = this.leftovers.length;
+    const oneDone = () => { if (--pending <= 0) done(); };
+    this.leftovers.forEach((el, i) => {
+      el.classList.remove("cell--pour-in");
+      const target = this.pileSlot(tray, Math.floor(i / 2), 1 - (i % 2));
+      if (!target) {
+        oneDone();
+        return;
+      }
+      const dx = target.left - parseFloat(el.style.left);
+      const dy = target.top - parseFloat(el.style.top);
+      const drift = el.animate(
+        [
+          { transform: "translate(0px, 0px)" },
+          { transform: `translate(${dx}px, ${dy + 4}px)`, offset: 0.8 },
+          { transform: `translate(${dx}px, ${dy}px)` },
+        ],
+        { duration: DRIFT_MS, delay: i * 40, easing: "cubic-bezier(0.45, 0, 0.3, 1)", fill: "forwards" },
+      );
+      drift.onfinish = oneDone;
+      drift.oncancel = oneDone;
+    });
+  }
+
+  /**
+   * Screen box of a slot in a bottom pile: `level` counts up from the tray floor
+   * (levels past the frame's five rows extend above it), `col` is 0 = left.
+   */
+  private pileSlot(tray: HTMLElement, level: number, col: number): { left: number; top: number; size: number } | null {
+    const cells = Array.from(tray.querySelectorAll<HTMLElement>(".ten-frame > .cell"));
+    const ROWS = CELLS_PER_TRAY / 2;
+    if (cells.length < CELLS_PER_TRAY) return null;
+    const ref = cells[(ROWS - 1 - Math.min(level, ROWS - 1)) * 2 + col].getBoundingClientRect();
+    const pitch = cells[2].getBoundingClientRect().top - cells[0].getBoundingClientRect().top;
+    const above = Math.max(0, level - (ROWS - 1));
+    return { left: ref.left, top: ref.top - above * pitch, size: ref.width };
+  }
+
+  private clearLeftovers(): void {
+    for (const el of this.leftovers) el.remove();
+    this.leftovers = [];
   }
 
   private reportInvalidColumn(correctPlace: number): void {

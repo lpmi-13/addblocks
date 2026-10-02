@@ -1024,6 +1024,27 @@ body {
   will-change: transform;
 }
 
+/* a lifted carry block: deeper shadow while it hovers above the board */
+.fly-block--lifted {
+  box-shadow: 0 18px 30px rgba(23, 36, 43, 0.32), inset 0 -3px 0 rgba(78, 145, 178, 0.35);
+}
+
+/* free-floating copies of a full ten as they lift and gather into one block */
+.merge-cell {
+  position: fixed;
+  z-index: 64;
+  margin: 0;
+  pointer-events: none;
+  box-sizing: border-box;
+  transform-origin: center;
+  will-change: transform;
+}
+
+/* blocks past a full ten, waiting above the frame; under the lifting ten */
+.leftover-cell {
+  z-index: 63;
+}
+
 /* result / completion */
 .result {
   text-align: center;
