@@ -14,6 +14,7 @@ const GATHER_MS = 520; // a full ten lifting toward the viewer and drawing toget
 const MERGE_MS = 220; // the gathered ten fusing into one carry block
 const DRIFT_MS = 380; // leftovers above a carried ten settling down into the frame
 const LIFT_SCALE = 1.45; // how far toward the viewer the ten swell before merging
+const REVEAL_EASE = "cubic-bezier(0.35, 0, 0.3, 1)"; // shared by the carry's flight and a new column's slide-in
 
 interface Handlers {
   onChangeLevel: () => void;
@@ -153,9 +154,12 @@ export class ProblemView {
 
   /* --------------------------------------------------------------- rendering */
 
-  private renderBoard(visual?: Column[]): void {
+  /**
+   * `count` lets a carry hold back a column it is about to create, so the new
+   * column can slide in as the carry block flies to it rather than snapping in.
+   */
+  private renderBoard(visual?: Column[], count = this.machine.columnCount): void {
     const cols = visual ?? this.machine.snapshotColumns();
-    const count = this.machine.columnCount;
     clear(this.boardEl);
     this.topTrays = new Array(count).fill(null);
     this.bottomTrays = new Array(count).fill(null);
@@ -196,9 +200,18 @@ export class ProblemView {
 
     // Total each column beneath the rule once it has been poured. While a pour is
     // still animating (`visual`), hold that column's total back until it settles.
+    // Columns without a total get an invisible placeholder so the row's height is
+    // reserved from the start and the first total doesn't push the page down.
     const shown = new Set<number>();
     for (let p = count - 1; p >= 0; p--) {
-      if (!this.machine.isSettled(p) || p === this.pouringPlace) continue;
+      if (!this.machine.isSettled(p) || p === this.pouringPlace) {
+        const placeholder = h("span", { class: "col-sum col-sum--pending", text: "0", attrs: { "aria-hidden": "true" } });
+        const cell = this.gridCell(5, count + 1 - p, placeholder);
+        cell.dataset.place = String(p);
+        cell.classList.add("sum-slot");
+        this.boardEl.append(cell);
+        continue;
+      }
       const sum = h("span", { class: "col-sum", text: String(cols[p].bottom) });
       // Only animate totals that are newly appearing, not ones redrawn by a re-render.
       if (!this.shownSums.has(p)) sum.classList.add("col-sum--new");
@@ -478,7 +491,7 @@ export class ProblemView {
     visual[result.from].top = 0;
     visual[result.from].bottom = result.filledTo;
     if (carrying && result.to >= 0) visual[result.to].top -= result.carried;
-    this.renderBoard(visual);
+    this.renderBoard(visual, result.createdColumn ? this.machine.columnCount - 1 : undefined);
     this.renderControls();
 
     // Once the pour has landed, a full frame compresses into one carry block that
@@ -661,7 +674,6 @@ export class ProblemView {
     block.style.top = `${cy - size / 2}px`;
     block.style.opacity = "0";
 
-    const toRect = this.topTrays[toPlace]?.getBoundingClientRect() ?? null;
     const cleanup = () => {
       for (const c of clones) c.remove();
       block.remove();
@@ -685,7 +697,13 @@ export class ProblemView {
         // The ten have gone; the leftovers piled above settle into the emptied frame.
         let pending = 2;
         const oneDone = () => { if (--pending <= 0) cleanup(); };
-        this.driftLeftovers(fromTray, oneDone);
+        // A carry into a brand-new column widens the board now, in step with the
+        // flight. Targets below are measured in the widened (final) layout.
+        const reveal = result.createdColumn ? this.revealNewColumn(result) : null;
+        const tray = this.bottomTrays[fromPlace] ?? fromTray;
+        const toRect = this.topTrays[toPlace]?.getBoundingClientRect() ?? null;
+        this.driftLeftovers(tray, oneDone);
+        reveal?.();
         if (!toRect) {
           oneDone();
           return;
@@ -701,13 +719,80 @@ export class ProblemView {
             { transform: `translate(${(tx - cx) * 0.5}px, ${(ty - cy) * 0.5 - arc}px) scale(${LIFT_SCALE})`, offset: 0.5 },
             { transform: `translate(${tx - cx}px, ${ty - cy}px) scale(1)`, offset: 1 },
           ],
-          { duration: BOUNCE_MS, easing: "cubic-bezier(0.35, 0, 0.3, 1)", fill: "forwards" },
+          { duration: BOUNCE_MS, easing: REVEAL_EASE, fill: "forwards" },
         );
         fly.onfinish = oneDone;
         fly.oncancel = oneDone;
       };
       merge.oncancel = cleanup;
     });
+  }
+
+  /**
+   * Re-render the board with the column the carry created, then FLIP every grid
+   * cell from where it sat in the narrower board to its new place: existing
+   * columns ease aside while the new leftmost column glides out from behind the
+   * old one. Returns a function that starts the motion, so callers can measure
+   * the final layout first (transforms would skew those measurements).
+   */
+  private revealNewColumn(result: MoveResult): () => void {
+    // The rule's span widens with the board, so key it by role rather than column.
+    const key = (el: HTMLElement) =>
+      `${el.style.gridRow}|${el.dataset.place ?? (el.classList.contains("rule") ? "rule" : el.style.gridColumn)}`;
+    const before = new Map<string, DOMRect>();
+    for (const el of this.boardEl.querySelectorAll<HTMLElement>(":scope > .grid-cell")) {
+      before.set(key(el), el.getBoundingClientRect());
+    }
+    // The leftmost column's cells, by row, which the new column starts behind.
+    const oldLeft = result.to - 1;
+    const behind = new Map<string, DOMRect>();
+    for (const el of this.boardEl.querySelectorAll<HTMLElement>(`:scope > .grid-cell[data-place="${oldLeft}"]`)) {
+      behind.set(el.style.gridRow, el.getBoundingClientRect());
+    }
+
+    // Mid-carry picture: the ten have left the frame (only leftovers float above
+    // it) and the carry block has not yet landed in the new column.
+    const visual = this.machine.snapshotColumns();
+    visual[result.from].bottom = 0;
+    visual[result.to].top -= result.carried;
+    // Jump the cell size straight to its new value; the FLIP scale eases it.
+    this.boardEl.style.transition = "none";
+    this.renderBoard(visual);
+
+    const moves: { el: HTMLElement; from: DOMRect; to: DOMRect; isNew: boolean }[] = [];
+    for (const el of this.boardEl.querySelectorAll<HTMLElement>(":scope > .grid-cell")) {
+      const isNew = el.dataset.place === String(result.to);
+      const from = isNew ? behind.get(el.style.gridRow) : before.get(key(el));
+      if (from) moves.push({ el, from, to: el.getBoundingClientRect(), isNew });
+    }
+
+    return () => {
+      this.boardEl.style.transition = "";
+      for (const { el, from, to, isNew } of moves) {
+        const dx = from.left - to.left;
+        const dy = from.top - to.top;
+        const sx = to.width ? from.width / to.width : 1;
+        const sy = to.height ? from.height / to.height : 1;
+        if (!isNew && Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5 && Math.abs(sx - 1) < 0.01 && Math.abs(sy - 1) < 0.01) continue;
+        el.style.transformOrigin = "0 0";
+        // The new column tucks under its neighbour until it has slid clear.
+        el.style.position = "relative";
+        el.style.zIndex = isNew ? "0" : "1";
+        const start = `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`;
+        const frames: Keyframe[] = isNew
+          ? // Fade up early so nothing pokes out from behind before it slides.
+            [{ transform: start, opacity: 0 }, { opacity: 1, offset: 0.35 }, { transform: "none", opacity: 1 }]
+          : [{ transform: start }, { transform: "none" }];
+        const anim = el.animate(frames, { duration: BOUNCE_MS, easing: REVEAL_EASE });
+        const reset = () => {
+          el.style.transformOrigin = "";
+          el.style.position = "";
+          el.style.zIndex = "";
+        };
+        anim.onfinish = reset;
+        anim.oncancel = reset;
+      }
+    };
   }
 
   /**

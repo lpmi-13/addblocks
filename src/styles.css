@@ -832,6 +832,9 @@ body {
   font-weight: 800;
   line-height: 1;
 }
+.col-sum--pending {
+  visibility: hidden;
+}
 .col-sum--new {
   animation: fade-up 0.4s ease;
 }
